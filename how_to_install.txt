@@ -1,0 +1,24 @@
+### step 1
+conda create -n gaussian_splatting python=3.8
+
+### step 2
+conda activate gaussian_splatting
+
+### step 3
+conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
+conda install nvidia/label/cuda-11.8.0::cuda cudatoolkit=11.8
+
+### step 4
+pip install --upgrade pip setuptools wheel
+pip install tqdm opencv-python joblib
+
+### step 5
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+### step 6
+pip install submodules/diff-gaussian-rasterization
+pip install submodules/simple-knn
+pip install submodules/fused-ssim
+
+# submodules 설치 중 에러 시 대처요령
+export TORCH_CUDA_ARCH_LIST="8.6"-> nvidia 그래픽카드에 맞는 ARCH 수정, ARCH 버전은 다음에서 확인 https://developer.nvidia.com/cuda-gpus
