@@ -1,24 +1,54 @@
-### step 1
-conda create -n gaussian_splatting python=3.8
 
-### step 2
-conda activate gaussian_splatting
+# Before the architecture of BlackWell
+    ### step 1
+    conda create -n gaussian_splatting python=3.8
 
-### step 3
-conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
-conda install nvidia/label/cuda-11.8.0::cuda cudatoolkit=11.8
+    ### step 2
+    conda activate gaussian_splatting
+    export TORCH_CUDA_ARCH_LIST="8.6"-> nvidia 그래픽카드에 맞는 ARCH 수정, ARCH 버전은 다음에서 확인 https://developer.nvidia.com/cuda-gpus
 
-### step 4
-pip install --upgrade pip setuptools wheel
-pip install tqdm opencv-python joblib
+    ### step 3
+    conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
+    conda install nvidia/label/cuda-11.8.0::cuda cudatoolkit=11.8
 
-### step 5
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    ### step 4
+    pip install --upgrade pip setuptools wheel
+    pip install tqdm opencv-python joblib
 
-### step 6
-pip install submodules/diff-gaussian-rasterization
-pip install submodules/simple-knn
-pip install submodules/fused-ssim
+    ### step 5
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
-# submodules 설치 중 에러 시 대처요령
-export TORCH_CUDA_ARCH_LIST="8.6"-> nvidia 그래픽카드에 맞는 ARCH 수정, ARCH 버전은 다음에서 확인 https://developer.nvidia.com/cuda-gpus
+    ### step 6
+    pip install submodules/diff-gaussian-rasterization
+    pip install submodules/simple-knn
+    pip install submodules/fused-ssim
+
+
+# BlackWell
+    ### step 1
+    conda create -n gaussian_splatting python=3.10
+
+    ### step 2
+    conda activate gaussian_splatting
+    export TORCH_CUDA_ARCH_LIST="12.0"-> nvidia 그래픽카드에 맞는 ARCH 수정, ARCH 버전은 다음에서 확인 https://developer.nvidia.com/cuda-gpus
+
+    ### step 3
+    conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
+    conda install nvidia/label/cuda-12.8.1::cuda # 참조 https://anaconda.org/nvidia/cuda
+    # In case of Pro6000, use below command
+    conda install nvidia/label/cuda-12.9.1::cuda
+
+    ### step 4
+    pip install --upgrade pip setuptools wheel
+    pip install tqdm opencv-python joblib
+
+    ### step 5
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+    # In case of using Pro6000, use below command
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
+
+    ### step 6
+    pip install submodules/diff-gaussian-rasterization
+    pip install submodules/simple-knn
+    pip install submodules/fused-ssim
+
