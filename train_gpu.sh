@@ -1,9 +1,11 @@
 #!/bin/bash
 
 # Individual GPU training script
-# Usage: ./train_gpu.sh <gpu_id>
+# Usage: ./train_gpu.sh <gpu_id> [gpu_index] [total_gpus]
 
 GPU_ID=$1
+GPU_INDEX=${2:-$1}  # Default to GPU_ID if not provided (backward compatibility)
+TOTAL_GPUS=${3:-4}  # Default to 4 GPUs if not provided (backward compatibility)
 # select Dataset: coffee_martini
 # BASE_DIR="/home/onyuk/Dataset/N3DV/coffee_martini/colmaps"
 # OUTPUT_BASE="/home/onyuk/Workspace/gaussian-splatting/output/coffee_martini"
@@ -30,10 +32,11 @@ log() {
 
 # Function to get frames for this GPU (modulo distribution)
 get_frames_for_gpu() {
-    local gpu_id=$1
+    local gpu_index=$1
+    local total_gpus=$2
     local frames=()
     for i in $(seq 00 299); do
-        if [ $((i % 4)) -eq $gpu_id ]; then
+        if [ $((i % total_gpus)) -eq $gpu_index ]; then
             frames+=($(printf "%04d" $i))
         fi
     done
@@ -198,11 +201,11 @@ main() {
         exit 1
     fi
     
-    log "Starting GPU $GPU_ID processing"
+    log "Starting GPU $GPU_ID processing (index $GPU_INDEX/$TOTAL_GPUS)"
     log "Log file: $LOG_FILE"
     
     # Get frames assigned to this GPU
-    frames=($(get_frames_for_gpu $GPU_ID))
+    frames=($(get_frames_for_gpu $GPU_INDEX $TOTAL_GPUS))
     total_frames=${#frames[@]}
     
     log "Assigned $total_frames frames: ${frames[@]:0:5}..."

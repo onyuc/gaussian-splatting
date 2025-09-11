@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Main tmux launcher for distributed Gaussian Splatting training
-# Runs 4 GPU processes in separate tmux sessions
+# Runs GPU processes in separate tmux sessions with user-specified GPUs
 
 GAUSSIAN_DIR="/home/onyuk/Workspace/gaussian-splatting"
 SESSION_NAME="gaussian_training"
@@ -16,12 +16,61 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Gaussian Splatting Multi-GPU Training${NC}"
 echo -e "${BLUE}========================================${NC}"
-echo "Processing frames 0000-0299 across 4 GPUs"
-echo "GPU 0: frames 0000, 0004, 0008, 0012, ..."
-echo "GPU 1: frames 0001, 0005, 0009, 0013, ..."
-echo "GPU 2: frames 0002, 0006, 0010, 0014, ..."
-echo "GPU 3: frames 0003, 0007, 0011, 0015, ..."
-echo ""
+
+# Function to get GPU input from user
+get_gpu_input() {
+    echo -e "${YELLOW}Available GPUs:${NC}"
+    nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv,noheader,nounits | \
+        awk -F', ' '{printf "  GPU %s: %s (Memory: %s/%s MB)\n", $1, $2, $4, $3}'
+    echo ""
+    
+    while true; do
+        echo -e "${YELLOW}Enter GPU IDs to use (comma-separated, e.g., 0,1,2 or 1,3):${NC}"
+        read -p "GPUs: " gpu_input
+        
+        # Remove spaces and split by comma
+        IFS=',' read -ra GPU_ARRAY <<< "${gpu_input// /}"
+        
+        # Validate GPU IDs
+        valid=true
+        for gpu in "${GPU_ARRAY[@]}"; do
+            if ! [[ "$gpu" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}Error: '$gpu' is not a valid GPU ID${NC}"
+                valid=false
+                break
+            fi
+            
+            # Check if GPU exists
+            if ! nvidia-smi -i "$gpu" &>/dev/null; then
+                echo -e "${RED}Error: GPU $gpu not found${NC}"
+                valid=false
+                break
+            fi
+        done
+        
+        if [ "$valid" = true ] && [ ${#GPU_ARRAY[@]} -gt 0 ]; then
+            break
+        else
+            echo -e "${RED}Please enter valid GPU IDs${NC}"
+        fi
+    done
+    
+    echo ""
+    echo -e "${GREEN}Selected GPUs: ${GPU_ARRAY[*]}${NC}"
+    echo "Processing frames 0000-0299 across ${#GPU_ARRAY[@]} GPUs"
+    
+    # Show frame distribution
+    for i in "${!GPU_ARRAY[@]}"; do
+        gpu=${GPU_ARRAY[$i]}
+        frames_example=""
+        for ((f=i; f<20; f+=${#GPU_ARRAY[@]})); do
+            frames_example+="$(printf "%04d" $f), "
+        done
+        frames_example="${frames_example%, }..."
+        echo "GPU $gpu: frames $frames_example"
+    done
+    echo ""
+}
 
 # Change to gaussian-splatting directory
 cd "$GAUSSIAN_DIR"
@@ -43,27 +92,28 @@ if ! nvidia-smi &> /dev/null; then
     exit 1
 fi
 
-nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv,noheader,nounits
-echo ""
+# Get GPU input from user
+get_gpu_input
 
 # Create logs directory
 mkdir -p logs
 
 # Kill existing sessions if they exist
 echo -e "${YELLOW}Cleaning up existing tmux sessions...${NC}"
-for gpu in {0..3}; do
+for gpu in "${GPU_ARRAY[@]}"; do
     tmux kill-session -t "${SESSION_NAME}_gpu${gpu}" 2>/dev/null || true
 done
 
-# Start tmux sessions for each GPU
-echo -e "${GREEN}Starting tmux sessions for 4 GPUs...${NC}"
-for gpu in {0..3}; do
+# Start tmux sessions for each selected GPU
+echo -e "${GREEN}Starting tmux sessions for ${#GPU_ARRAY[@]} GPUs...${NC}"
+for i in "${!GPU_ARRAY[@]}"; do
+    gpu=${GPU_ARRAY[$i]}
     session_name="${SESSION_NAME}_gpu${gpu}"
     echo "Starting session: $session_name"
     
-    # Create new tmux session and run the training script
+    # Create new tmux session and run the training script with GPU index in array
     tmux new-session -d -s "$session_name" -c "$GAUSSIAN_DIR" \
-        "bash -c 'echo \"Starting GPU $gpu training...\"; ./train_gpu.sh $gpu; echo \"GPU $gpu completed. Press any key to exit.\"; read'"
+        "bash -c 'echo \"Starting GPU $gpu training (index $i)...\"; ./train_gpu.sh $gpu $i ${#GPU_ARRAY[@]}; echo \"GPU $gpu completed. Press any key to exit.\"; read'"
     
     echo -e "${GREEN}✓${NC} GPU $gpu session started: $session_name"
 done
@@ -73,18 +123,16 @@ echo -e "${GREEN}All GPU sessions started successfully!${NC}"
 echo ""
 echo -e "${YELLOW}Useful tmux commands:${NC}"
 echo "  tmux list-sessions                    # List all sessions"
-echo "  tmux attach -t ${SESSION_NAME}_gpu0   # Attach to GPU 0 session"
-echo "  tmux attach -t ${SESSION_NAME}_gpu1   # Attach to GPU 1 session"
-echo "  tmux attach -t ${SESSION_NAME}_gpu2   # Attach to GPU 2 session"
-echo "  tmux attach -t ${SESSION_NAME}_gpu3   # Attach to GPU 3 session"
+for gpu in "${GPU_ARRAY[@]}"; do
+    echo "  tmux attach -t ${SESSION_NAME}_gpu${gpu}   # Attach to GPU ${gpu} session"
+done
 echo "  Ctrl+B, D                            # Detach from session"
 echo "  tmux kill-session -t <session_name>  # Kill a session"
 echo ""
 echo -e "${YELLOW}Monitoring:${NC}"
-echo "  tail -f logs/gpu_0.log               # Monitor GPU 0 progress"
-echo "  tail -f logs/gpu_1.log               # Monitor GPU 1 progress"
-echo "  tail -f logs/gpu_2.log               # Monitor GPU 2 progress"
-echo "  tail -f logs/gpu_3.log               # Monitor GPU 3 progress"
+for gpu in "${GPU_ARRAY[@]}"; do
+    echo "  tail -f logs/gpu_${gpu}.log               # Monitor GPU ${gpu} progress"
+done
 echo ""
 
 # Function to monitor all sessions
@@ -99,7 +147,7 @@ monitor_sessions() {
         echo "$(date)"
         echo ""
         
-        for gpu in {0..3}; do
+        for gpu in "${GPU_ARRAY[@]}"; do
             session_name="${SESSION_NAME}_gpu${gpu}"
             if tmux has-session -t "$session_name" 2>/dev/null; then
                 echo -e "${GREEN}GPU $gpu: RUNNING${NC} (session: $session_name)"
@@ -126,7 +174,7 @@ monitor_sessions() {
         
         # Check if all sessions are done
         active_sessions=0
-        for gpu in {0..3}; do
+        for gpu in "${GPU_ARRAY[@]}"; do
             if tmux has-session -t "${SESSION_NAME}_gpu${gpu}" 2>/dev/null; then
                 ((active_sessions++))
             fi
@@ -137,7 +185,7 @@ monitor_sessions() {
             break
         fi
         
-        echo "Active sessions: $active_sessions/4"
+        echo "Active sessions: $active_sessions/${#GPU_ARRAY[@]}"
         echo "Refreshing in 30 seconds..."
         sleep 30
     done
@@ -157,14 +205,16 @@ case $choice in
         ;;
     2)
         echo "Available sessions:"
-        for gpu in {0..3}; do
-            echo "  $gpu) ${SESSION_NAME}_gpu${gpu}"
+        for i in "${!GPU_ARRAY[@]}"; do
+            gpu=${GPU_ARRAY[$i]}
+            echo "  $i) ${SESSION_NAME}_gpu${gpu} (GPU $gpu)"
         done
-        read -p "Choose GPU (0-3): " gpu_choice
-        if [[ "$gpu_choice" =~ ^[0-3]$ ]]; then
-            echo "Attaching to GPU $gpu_choice session..."
+        read -p "Choose session (0-$((${#GPU_ARRAY[@]}-1))): " session_choice
+        if [[ "$session_choice" =~ ^[0-9]+$ ]] && [ "$session_choice" -lt "${#GPU_ARRAY[@]}" ]; then
+            selected_gpu=${GPU_ARRAY[$session_choice]}
+            echo "Attaching to GPU $selected_gpu session..."
             echo "Use Ctrl+B, D to detach"
-            tmux attach -t "${SESSION_NAME}_gpu${gpu_choice}"
+            tmux attach -t "${SESSION_NAME}_gpu${selected_gpu}"
         else
             echo "Invalid choice"
         fi
