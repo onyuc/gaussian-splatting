@@ -35,8 +35,6 @@
     ### step 3
     conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
     conda install nvidia/label/cuda-12.8.1::cuda # 참조 https://anaconda.org/nvidia/cuda
-    # In case of Pro6000, use below command
-    conda install nvidia/label/cuda-12.9.1::cuda
 
     ### step 4
     pip install --upgrade pip setuptools wheel
@@ -44,8 +42,6 @@
 
     ### step 5
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-    # In case of using Pro6000, use below command
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
 
     ### step 6
     pip install submodules/diff-gaussian-rasterization
