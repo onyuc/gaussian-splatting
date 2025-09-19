@@ -3,7 +3,7 @@
 # Main tmux launcher for distributed Gaussian Splatting training
 # Runs GPU processes in separate tmux sessions with user-specified GPUs
 
-GAUSSIAN_DIR="/home/onyuk/Workspace/gaussian-splatting"
+GAUSSIAN_DIR="/home/onyuc/Workspace/gaussian-splatting"
 SESSION_NAME="gaussian_training"
 
 # Colors for output
