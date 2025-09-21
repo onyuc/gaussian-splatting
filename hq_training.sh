@@ -3,7 +3,7 @@
 # High-Quality Iterative Training Script
 # Runs independently in tmux with automatic PSNR analysis and retraining
 
-GAUSSIAN_DIR="/home/onyuc/Workspace/gaussian-splatting"
+GAUSSIAN_DIR="/home/onyuk/Workspace/gaussian-splatting"
 SESSION_NAME="hq_training"
 
 # Colors for output
@@ -18,6 +18,7 @@ NC='\033[0m' # No Color
 declare -a GPU_ARRAY
 DATASET_PATH=""
 OUTPUT_PATH=""
+LOG_DIR=""
 MAX_ITERATIONS=10
 PSNR_THRESHOLD_PERCENTILE=50
 
@@ -32,7 +33,7 @@ get_dataset_path() {
     
     while true; do
         echo -e "${YELLOW}Enter the dataset path (should contain 'colmaps' directory):${NC}"
-        echo "Example: /mnt/HDD/onyuc/dataset/N3DV/cut_roasted_beef"
+        echo "Example: /data1/onyuk/dataset/N3DV/cut_roasted_beef"
         read -p "Dataset path: " dataset_input
         
         # Remove trailing slash
@@ -74,7 +75,7 @@ get_output_path() {
     dataset_name=$(basename "$DATASET_PATH")
     
     # Suggest default output path
-    default_output="/mnt/HDD/onyuc/gaussian_splatting/output/$dataset_name"
+    default_output="/data1/onyuk/gaussian_splatting/output/$dataset_name"
     
     echo -e "${YELLOW}Suggested output path:${NC} $default_output"
     echo ""
@@ -108,6 +109,14 @@ get_output_path() {
         
         # Create output directory if it doesn't exist
         mkdir -p "$OUTPUT_PATH"
+        
+        # Create log directory structure
+        LOG_DIR="$OUTPUT_PATH/logs"
+        mkdir -p "$LOG_DIR/iterations"
+        mkdir -p "$LOG_DIR/gpu_sessions"
+        mkdir -p "$LOG_DIR/psnr_analysis"
+        echo -e "${GREEN}✓ Log directories created: $LOG_DIR${NC}"
+        
         break
     done
 }
@@ -154,6 +163,35 @@ get_gpu_input() {
     
     echo ""
     echo -e "${GREEN}Selected GPUs: ${GPU_ARRAY[*]}${NC}"
+    echo ""
+}
+
+# Function to get PSNR threshold
+get_psnr_threshold() {
+    echo -e "${CYAN}=== PSNR Threshold Configuration ===${NC}"
+    echo ""
+    
+    while true; do
+        echo -e "${YELLOW}Enter PSNR threshold percentile (1-99, default: 50):${NC}"
+        echo "Lower values = more frames retrained (stricter quality)"
+        echo "Higher values = fewer frames retrained (more lenient)"
+        read -p "Threshold percentile: " threshold_input
+        
+        # Use default if empty
+        if [ -z "$threshold_input" ]; then
+            threshold_input=50
+        fi
+        
+        # Validate input
+        if [[ "$threshold_input" =~ ^[1-9]$|^[1-9][0-9]$ ]] && [ "$threshold_input" -le 99 ]; then
+            PSNR_THRESHOLD_PERCENTILE=$threshold_input
+            break
+        else
+            echo -e "${RED}Error: Please enter a number between 1 and 99${NC}"
+        fi
+    done
+    
+    echo -e "${GREEN}✓ PSNR threshold percentile: $PSNR_THRESHOLD_PERCENTILE%${NC}"
     echo ""
 }
 
@@ -229,10 +267,12 @@ except:
     done
     
     echo "Collected PSNR data from $collected_frames/$total_frames frames"
+    echo "Collected frames: $collected_frames/$total_frames" >> "$LOG_DIR/iterations/psnr_analysis.log"
     
     if [ $collected_frames -lt 10 ]; then
         echo -e "${RED}Error: Not enough PSNR data collected ($collected_frames frames)${NC}"
         echo "Need at least 10 frames with completed metrics"
+        echo "ERROR: Insufficient data - $collected_frames frames" >> "$LOG_DIR/iterations/psnr_analysis.log"
         return 1
     fi
     
@@ -255,12 +295,12 @@ with open('$psnr_file', 'r') as f:
 if len(psnr_values) == 0:
     sys.exit(1)
 
-# Calculate threshold for bottom 50%
+# Calculate threshold for specified percentile
 psnr_values.sort()
-threshold_index = int(len(psnr_values) * 0.5)  # 50th percentile
+threshold_index = int(len(psnr_values) * $PSNR_THRESHOLD_PERCENTILE / 100.0)
 threshold = psnr_values[threshold_index]
 
-print(f'PSNR threshold (50th percentile): {threshold}', file=sys.stderr)
+print(f'PSNR threshold ({$PSNR_THRESHOLD_PERCENTILE}th percentile): {threshold}', file=sys.stderr)
 
 # Identify frames below threshold
 retrain_frames = []
@@ -278,6 +318,11 @@ print(len(retrain_frames))
     
     echo "Identified $retrain_count frames for retraining"
     echo "Retrain list saved to: $retrain_file"
+    
+    # Log results
+    echo "Retrain count: $retrain_count" >> "$LOG_DIR/iterations/psnr_analysis.log"
+    echo "Threshold used: $PSNR_THRESHOLD_PERCENTILE%" >> "$LOG_DIR/iterations/psnr_analysis.log"
+    echo "---" >> "$LOG_DIR/iterations/psnr_analysis.log"
     
     # Cleanup
     rm -f "$psnr_file"
@@ -355,9 +400,9 @@ run_training_iteration() {
         session_name="${session_prefix}_gpu${gpu}"
         echo "Starting session: $session_name"
         
-        # Create new tmux session and run the training script
+        # Create new tmux session and run the training script with logging
         tmux new-session -d -s "$session_name" -c "$GAUSSIAN_DIR" \
-            "bash -c 'echo \"Starting GPU $gpu training iteration $iteration...\"; ./$training_script $gpu $i ${#GPU_ARRAY[@]}; echo \"GPU $gpu iteration $iteration completed. Press any key to exit.\"; read'"
+            "bash -c 'exec > >(tee -a \"$LOG_DIR/gpu_sessions/gpu${gpu}_iter${iteration}.log\") 2>&1; echo \"Starting GPU $gpu training iteration $iteration...\"; ./$training_script $gpu $i ${#GPU_ARRAY[@]}; echo \"GPU $gpu iteration $iteration completed.\"; sleep 5'"
         
         echo -e "${GREEN}✓${NC} GPU $gpu session started: $session_name"
     done
@@ -409,7 +454,7 @@ OUTPUT_PATH="__OUTPUT_PATH__"
 MAX_ITERATIONS=__MAX_ITERATIONS__
 GPU_ARRAY=(__GPU_ARRAY__)
 
-GAUSSIAN_DIR="/home/onyuc/Workspace/gaussian-splatting"
+GAUSSIAN_DIR="/home/onyuk/Workspace/gaussian-splatting"
 cd "$GAUSSIAN_DIR"
 
 # Colors for output
@@ -423,6 +468,17 @@ NC='\033[0m'
 # Activate conda environment
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate gaussian_splatting
+
+# Initialize progress log
+LOG_DIR="__LOG_DIR__"
+echo "=== HQ Training Progress Log ===" > "$LOG_DIR/progress.log"
+echo "Start time: $(date)" >> "$LOG_DIR/progress.log"
+echo "Dataset: $DATASET_PATH" >> "$LOG_DIR/progress.log"
+echo "Output: $OUTPUT_PATH" >> "$LOG_DIR/progress.log"
+echo "GPUs: ${GPU_ARRAY[*]}" >> "$LOG_DIR/progress.log"
+echo "Max iterations: $MAX_ITERATIONS" >> "$LOG_DIR/progress.log"
+echo "PSNR threshold: __PSNR_THRESHOLD_PERCENTILE__%%" >> "$LOG_DIR/progress.log"
+echo "---" >> "$LOG_DIR/progress.log"
 
 # Function to analyze PSNR results
 analyze_psnr_results() {
@@ -494,12 +550,12 @@ with open('$psnr_file', 'r') as f:
 if len(psnr_values) == 0:
     sys.exit(1)
 
-# Calculate threshold for bottom 50%
+# Calculate threshold for specified percentile
 psnr_values.sort()
-threshold_index = int(len(psnr_values) * 0.5)
+threshold_index = int(len(psnr_values) * __PSNR_THRESHOLD_PERCENTILE__ / 100.0)
 threshold = psnr_values[threshold_index]
 
-print(f'PSNR threshold (50th percentile): {threshold}', file=sys.stderr)
+print(f'PSNR threshold (__PSNR_THRESHOLD_PERCENTILE__th percentile): {threshold}', file=sys.stderr)
 
 # Identify frames below threshold
 retrain_frames = []
@@ -618,7 +674,7 @@ run_training_iteration() {
         echo "Starting session: $session_name"
         
         tmux new-session -d -s "$session_name" -c "$GAUSSIAN_DIR" \
-            "bash -c 'echo \"Starting GPU $gpu training iteration $iteration...\"; ./$training_script $gpu $i ${#GPU_ARRAY[@]}; echo \"GPU $gpu iteration $iteration completed.\"; sleep 5'"
+            "bash -c 'exec > >(tee -a \"__LOG_DIR__/gpu_sessions/gpu${gpu}_iter${iteration}.log\") 2>&1; echo \"Starting GPU $gpu training iteration $iteration...\"; ./$training_script $gpu $i ${#GPU_ARRAY[@]}; echo \"GPU $gpu iteration $iteration completed.\"; sleep 5'"
         
         echo -e "${GREEN}✓${NC} GPU $gpu session started: $session_name"
     done
@@ -644,15 +700,20 @@ for ((iteration=1; iteration<=MAX_ITERATIONS; iteration++)); do
     echo ""
     echo -e "${YELLOW}=== Iteration $iteration/$MAX_ITERATIONS ===${NC}"
     
+    # Log iteration start
+    echo "Iteration $iteration started at $(date)" >> "$LOG_DIR/progress.log"
+    
     # Analyze PSNR results
     if ! analyze_psnr_results "$iteration"; then
         case $? in
             1)
                 echo -e "${RED}PSNR analysis failed - stopping training${NC}"
+                echo "Iteration $iteration FAILED - PSNR analysis error at $(date)" >> "$LOG_DIR/progress.log"
                 break
                 ;;
             2)
                 echo -e "${GREEN}All frames meet quality threshold - training complete${NC}"
+                echo "Training COMPLETED - All frames meet threshold at $(date)" >> "$LOG_DIR/progress.log"
                 break
                 ;;
         esac
@@ -663,6 +724,7 @@ for ((iteration=1; iteration<=MAX_ITERATIONS; iteration++)); do
     run_training_iteration "$iteration"
     
     echo -e "${GREEN}Iteration $iteration completed${NC}"
+    echo "Iteration $iteration completed at $(date)" >> "$LOG_DIR/progress.log"
 done
 
 echo ""
@@ -673,6 +735,12 @@ echo "GPUs used: ${GPU_ARRAY[*]}"
 echo "Iterations completed: $iteration"
 echo -e "${GREEN}High-quality iterative training completed successfully!${NC}"
 
+# Final progress log
+echo "=== TRAINING COMPLETED ===" >> "$LOG_DIR/progress.log"
+echo "End time: $(date)" >> "$LOG_DIR/progress.log"
+echo "Total iterations completed: $iteration" >> "$LOG_DIR/progress.log"
+echo "GPUs used: ${GPU_ARRAY[*]}" >> "$LOG_DIR/progress.log"
+
 # Keep session alive
 echo ""
 echo "Training completed. Press any key to exit."
@@ -682,7 +750,9 @@ EOF
     # Replace placeholders
     sed -i "s|__DATASET_PATH__|$DATASET_PATH|g" "$master_script"
     sed -i "s|__OUTPUT_PATH__|$OUTPUT_PATH|g" "$master_script"
+    sed -i "s|__LOG_DIR__|$LOG_DIR|g" "$master_script"
     sed -i "s|__MAX_ITERATIONS__|$MAX_ITERATIONS|g" "$master_script"
+    sed -i "s|__PSNR_THRESHOLD_PERCENTILE__|$PSNR_THRESHOLD_PERCENTILE|g" "$master_script"
     sed -i "s|__GPU_ARRAY__|${GPU_ARRAY[*]}|g" "$master_script"
     
     chmod +x "$master_script"
@@ -713,6 +783,7 @@ main() {
     # Get configuration
     get_dataset_path
     get_output_path
+    get_psnr_threshold
     get_max_iterations
     get_gpu_input
     
@@ -720,8 +791,10 @@ main() {
     echo -e "${BLUE}=== Final Configuration ===${NC}"
     echo "Dataset path: $DATASET_PATH"
     echo "Output path: $OUTPUT_PATH"
+    echo "Log directory: $LOG_DIR"
     echo "GPUs: ${GPU_ARRAY[*]}"
     echo "Max iterations: $MAX_ITERATIONS"
+    echo "PSNR threshold: $PSNR_THRESHOLD_PERCENTILE%"
     echo ""
     
     read -p "Proceed with high-quality iterative training? (y/N): " confirm
@@ -757,9 +830,15 @@ main() {
     echo "  tmux attach -t hq_master"
     echo "  Ctrl+B, D to detach"
     echo ""
+    echo "Log files will be saved to:"
+    echo "  Master log: $LOG_DIR/hq_master.log"
+    echo "  GPU sessions: $LOG_DIR/gpu_sessions/"
+    echo "  PSNR analysis: $LOG_DIR/iterations/psnr_analysis.log"
+    echo ""
     
-    # Start master session
-    tmux new-session -d -s hq_master -c "$GAUSSIAN_DIR" "./hq_master.sh"
+    # Start master session with logging
+    tmux new-session -d -s hq_master -c "$GAUSSIAN_DIR" \
+        "bash -c 'exec > >(tee -a \"$LOG_DIR/hq_master.log\") 2>&1; ./hq_master.sh'"
     
     echo -e "${GREEN}HQ training started in background!${NC}"
     echo "Use 'tmux attach -t hq_master' to monitor progress"
