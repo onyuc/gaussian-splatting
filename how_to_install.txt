@@ -1,15 +1,18 @@
 
 # Before the architecture of BlackWell
     ### step 1
-    conda create -n gaussian_splatting python=3.8
+    conda create -n gaussian_splatting python=3.10
 
     ### step 2
     conda activate gaussian_splatting
     export TORCH_CUDA_ARCH_LIST="8.6"-> nvidia 그래픽카드에 맞는 ARCH 수정, ARCH 버전은 다음에서 확인 https://developer.nvidia.com/cuda-gpus
 
     ### step 3
-    conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
-    conda install nvidia/label/cuda-11.8.0::cuda cudatoolkit=11.8
+    conda install -c conda-forge compilers sysroot_linux-64 plyfile gxx_linux-64=11 gcc_linux-64=11 libxcrypt
+    conda install nvidia/label/cuda-11.8.0::cuda cudatoolkit=11.8 #cuda11.8 support gcc under 11
+
+    ## step 3.5
+    You should write CUDA activation script below.
 
     ### step 4
     pip install --upgrade pip setuptools wheel
@@ -33,7 +36,7 @@
     export TORCH_CUDA_ARCH_LIST="12.0"-> nvidia 그래픽카드에 맞는 ARCH 수정, ARCH 버전은 다음에서 확인 https://developer.nvidia.com/cuda-gpus
 
     ### step 3
-    conda install -c conda-forge plyfile gxx_linux-64 gcc_linux-64 libxcrypt
+    conda install -c conda-forge compilers sysroot_linux-64 plyfile gxx_linux-64 gcc_linux-64 libxcrypt
     conda install nvidia/label/cuda-12.8.1::cuda # 참조 https://anaconda.org/nvidia/cuda
 
     ### step 4
@@ -49,7 +52,6 @@
     pip install submodules/fused-ssim
 
 
-# Default
 # 1. 디렉토리 생성
 mkdir -p ~/miniconda3/envs/gaussian_splatting/etc/conda/activate.d
 mkdir -p ~/miniconda3/envs/gaussian_splatting/etc/conda/deactivate.d
@@ -58,20 +60,26 @@ mkdir -p ~/miniconda3/envs/gaussian_splatting/etc/conda/deactivate.d
 # Activation 스크립트
 cat > ~/miniconda3/envs/gaussian_splatting/etc/conda/activate.d/env_vars.sh << 'EOF'
 #!/bin/bash
+export OLD_TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST
 export OLD_PATH=$PATH
 export OLD_CPATH=$CPATH
 export OLD_LD_LIBRARY_PATH=$LD_LIBRARY_PATH
 export OLD_CUDA_HOME=$CUDA_HOME
 
+export TORCH_CUDA_ARCH_LIST="8.6" #only for 3090
 export PATH=$CONDA_PREFIX/bin:$PATH
 export CUDA_HOME=$CONDA_PREFIX
-export CPATH=$CONDA_PREFIX/targets/x86_64-linux/include:$CPATH
-export LD_LIBRARY_PATH=$CONDA_PREFIX/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
+export CPATH=$CONDA_PREFIX/include:$CPATH
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 EOF
 
 # 3. Deactivation 스크립트 생성
 cat > ~/miniconda3/envs/gaussian_splatting/etc/conda/deactivate.d/env_vars.sh << 'EOF'
 #!/bin/bash
+if [ -n "$OLD_TORCH_CUDA_ARCH_LIST" ]; then
+    export TORCH_CUDA_ARCH_LIST=$OLD_TORCH_CUDA_ARCH_LIST
+    unset OLD_TORCH_CUDA_ARCH_LIST
+fi
 if [ -n "$OLD_PATH" ]; then
     export PATH=$OLD_PATH
     unset OLD_PATH

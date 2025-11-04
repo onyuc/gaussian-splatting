@@ -313,6 +313,72 @@ class GaussianModel:
 
         self.active_sh_degree = self.max_sh_degree
 
+        self.max_radii2D = torch.zeros((xyz.shape[0]), device="cuda")
+
+    def load_add_ply(self, path, use_train_test_exp = False):
+        plydata = PlyData.read(path)
+        if use_train_test_exp:
+            exposure_file = os.path.join(os.path.dirname(path), os.pardir, os.pardir, "exposure.json")
+            if os.path.exists(exposure_file):
+                with open(exposure_file, "r") as f:
+                    exposures = json.load(f)
+                self.pretrained_exposures = {image_name: torch.FloatTensor(exposures[image_name]).requires_grad_(False).cuda() for image_name in exposures}
+                print(f"Pretrained exposures loaded.")
+            else:
+                print(f"No exposure to be loaded at {exposure_file}")
+                self.pretrained_exposures = None
+
+        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                        np.asarray(plydata.elements[0]["y"]),
+                        np.asarray(plydata.elements[0]["z"])),  axis=1)
+        opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+
+        features_dc = np.zeros((xyz.shape[0], 3, 1))
+        features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
+        features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
+        features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
+
+        extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
+        extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
+        assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
+        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+        for idx, attr_name in enumerate(extra_f_names):
+            features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
+        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
+
+        scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
+        scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
+        for idx, attr_name in enumerate(scale_names):
+            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
+        rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
+        rots = np.zeros((xyz.shape[0], len(rot_names)))
+        for idx, attr_name in enumerate(rot_names):
+            rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        # Convert to tensors
+        new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+        new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
+        new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
+        new_opacity = torch.tensor(opacities, dtype=torch.float, device="cuda")
+        new_scaling = torch.tensor(scales, dtype=torch.float, device="cuda")
+        new_rotation = torch.tensor(rots, dtype=torch.float, device="cuda")
+
+        self._xyz = nn.Parameter(torch.cat([self._xyz, new_xyz], dim=0).requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.cat([self._features_dc, new_features_dc], dim=0).requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.cat([self._features_rest, new_features_rest], dim=0).requires_grad_(True))
+        self._opacity = nn.Parameter(torch.cat([self._opacity, new_opacity], dim=0).requires_grad_(True))
+        self._scaling = nn.Parameter(torch.cat([self._scaling, new_scaling], dim=0).requires_grad_(True))
+        self._rotation = nn.Parameter(torch.cat([self._rotation, new_rotation], dim=0).requires_grad_(True))
+        
+        # Update auxiliary buffers
+        self.max_radii2D = torch.cat([self.max_radii2D, torch.zeros((new_xyz.shape[0]), device="cuda")], dim=0)
+        
+        self.active_sh_degree = self.max_sh_degree
+
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -471,3 +537,299 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+class GaussianModel_Custom(GaussianModel):
+    def __init__(self, sh_degree, optimizer_type):
+        super().__init__(sh_degree, optimizer_type)
+        
+        self._xyz_freeze = None
+        self._features_dc_freeze = None
+        self._features_rest_freeze = None
+        self._opacity_freeze = None
+        self._scaling_freeze = None
+        self._rotation_freeze = None
+        self.n_freeze = 0  # Freeze 개수 저장
+        self.skip_group = ["xyz_freeze", "opacity_freeze", "scaling_freeze", "rotation_freeze", "f_dc_freeze", "f_rest_freeze"]
+
+    @property
+    def get_all_scaling(self):
+        if self._scaling_freeze is not None:
+            return self.scaling_activation(torch.cat([self._scaling_freeze, self._scaling], dim=0))
+        return self.scaling_activation(self._scaling)
+    
+    @property
+    def get_all_rotation(self):
+        if self._rotation_freeze is not None:
+            return self.rotation_activation(torch.cat([self._rotation_freeze, self._rotation], dim=0))
+        return self.rotation_activation(self._rotation)
+    
+    @property
+    def get_all_xyz(self):
+        if self._xyz_freeze is not None:
+            return torch.cat([self._xyz_freeze, self._xyz], dim=0)
+        return self._xyz
+    
+    @property
+    def get_all_features(self):
+        if self._features_dc_freeze is not None:
+            features_dc = torch.cat([self._features_dc_freeze, self._features_dc], dim=0)
+            features_rest = torch.cat([self._features_rest_freeze, self._features_rest], dim=0)
+            return torch.cat((features_dc, features_rest), dim=1)
+            
+        features_dc = self._features_dc
+        features_rest = self._features_rest
+        return torch.cat((features_dc, features_rest), dim=1)
+    
+    @property
+    def get_all_features_dc(self):
+        if self._features_dc_freeze is not None:
+            return torch.cat([self._features_dc_freeze, self._features_dc], dim=0)
+        return self._features_dc
+    
+    @property
+    def get_all_features_rest(self):
+        if self._features_rest_freeze is not None:
+            return torch.cat([self._features_rest_freeze, self._features_rest], dim=0)
+        return self._features_rest
+    
+    @property
+    def get_all_opacity(self):
+        if self._opacity_freeze is not None:
+            return self.opacity_activation(torch.cat([self._opacity_freeze, self._opacity], dim=0))
+        return self.opacity_activation(self._opacity)
+    
+    def get_all_covariance(self, scaling_modifier = 1):
+        return self.covariance_activation(self.get_all_scaling, scaling_modifier, self.get_all_rotation)
+
+    def load_gs(self, xyz, features_dc, features_extra, opacity, scaling, rotation):
+        # Convert new data to tensors
+        new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+        new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda")
+        new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda")
+        new_opacity = torch.tensor(opacity, dtype=torch.float, device="cuda")
+        new_scaling = torch.tensor(scaling, dtype=torch.float, device="cuda")
+        new_rotation = torch.tensor(rotation, dtype=torch.float, device="cuda")
+        
+        # Concatenate with existing parameters
+        # For xyz
+        combined_xyz = torch.cat([self._xyz.detach(), new_xyz], dim=0)
+        self._xyz = nn.Parameter(combined_xyz.requires_grad_(True))
+        
+        # For features_dc
+        combined_features_dc = torch.cat([self._features_dc.detach(), new_features_dc], dim=0)
+        self._features_dc = nn.Parameter(combined_features_dc.requires_grad_(True))
+        
+        # For features_rest
+        combined_features_rest = torch.cat([self._features_rest.detach(), new_features_rest], dim=0)
+        self._features_rest = nn.Parameter(combined_features_rest.requires_grad_(True))
+        
+        # For opacity
+        combined_opacity = torch.cat([self._opacity.detach(), new_opacity], dim=0)
+        self._opacity = nn.Parameter(combined_opacity.requires_grad_(True))
+        
+        # For scaling
+        combined_scaling = torch.cat([self._scaling.detach(), new_scaling], dim=0)
+        self._scaling = nn.Parameter(combined_scaling.requires_grad_(True))
+        
+        # For rotation
+        combined_rotation = torch.cat([self._rotation.detach(), new_rotation], dim=0)
+        self._rotation = nn.Parameter(combined_rotation.requires_grad_(True))
+        
+        # Update auxiliary buffers
+        self.max_radii2D = torch.cat([self.max_radii2D, torch.zeros((new_xyz.shape[0]), device="cuda")], dim=0)
+
+    def load_freeze_gs(self, xyz, features_dc, features_extra, opacity, scaling, rotation):
+        new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+        new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda")
+        new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda")
+        new_opacity = torch.tensor(opacity, dtype=torch.float, device="cuda")
+        new_scaling = torch.tensor(scaling, dtype=torch.float, device="cuda")
+        new_rotation = torch.tensor(rotation, dtype=torch.float, device="cuda")
+
+        self._xyz_freeze = nn.Parameter(new_xyz.requires_grad_(True))
+        self._features_dc_freeze = nn.Parameter(new_features_dc.requires_grad_(True))
+        self._features_rest_freeze = nn.Parameter(new_features_rest.requires_grad_(True))
+        self._opacity_freeze = nn.Parameter(new_opacity.requires_grad_(True))
+        self._scaling_freeze = nn.Parameter(new_scaling.requires_grad_(True))
+        self._rotation_freeze = nn.Parameter(new_rotation.requires_grad_(True))
+        
+        self.n_freeze = new_xyz.shape[0]
+
+    def empty_attributes(self):
+        self._xyz = torch.empty(0, 3, device="cuda")  # (0, 3)
+        self._features_dc = torch.empty(0, 1, 3, device="cuda")  # (0, 1, 3)
+        self._features_rest = torch.empty(0, (self.max_sh_degree + 1) ** 2 - 1, 3, device="cuda")  # (0, SH_coeffs-1, 3)
+        self._scaling = torch.empty(0, 3, device="cuda")  # (0, 3)
+        self._rotation = torch.empty(0, 4, device="cuda")  # (0, 4)
+        self._opacity = torch.empty(0, 1, device="cuda")  # (0, 1)
+        self.max_radii2D = torch.empty(0, device="cuda")  # (0,)
+
+        self._xyz_freeze = None
+        self._features_dc_freeze = None
+        self._features_rest_freeze = None
+        self._scaling_freeze = None
+        self._rotation_freeze = None
+        self._opacity_freeze = None
+
+        self.n_freeze = 0
+    
+    def save_ply(self, path):
+        # original
+        mkdir_p(os.path.dirname(path))
+        if self._xyz_freeze is not None:
+            concat_xyz = torch.cat([self._xyz, self._xyz_freeze], dim=0)
+            concat_features_dc = torch.cat([self._features_dc, self._features_dc_freeze], dim=0)
+            concat_features_rest = torch.cat([self._features_rest, self._features_rest_freeze], dim=0)
+            concat_opacity = torch.cat([self._opacity, self._opacity_freeze], dim=0)
+            concat_scaling = torch.cat([self._scaling, self._scaling_freeze], dim=0)
+            concat_rotation = torch.cat([self._rotation, self._rotation_freeze], dim=0)
+        else:
+            concat_xyz = self._xyz
+            concat_features_dc = self._features_dc
+            concat_features_rest = self._features_rest
+            concat_opacity = self._opacity
+            concat_scaling = self._scaling
+            concat_rotation = self._rotation
+
+        xyz = concat_xyz.detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = concat_features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        f_rest = concat_features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = concat_opacity.detach().cpu().numpy()
+        scale = concat_scaling.detach().cpu().numpy()
+        rotation = concat_rotation.detach().cpu().numpy()
+
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
+
+        # static
+
+        # if self._xyz_freeze is not None:
+        #     mkdir_p(os.path.dirname(path) + "_static")
+        #     static_path = os.path.dirname(path) + "_static/" + os.path.basename(path)
+
+        #     static_xyz = self._xyz_freeze.detach().cpu().numpy()
+        #     normals = np.zeros_like(static_xyz)
+        #     static_features_dc = self._features_dc_freeze.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        #     static_features_rest = self._features_rest_freeze.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        #     static_opacity = self._opacity_freeze.detach().cpu().numpy()
+        #     static_scaling = self._scaling_freeze.detach().cpu().numpy()
+        #     static_rotation = self._rotation_freeze.detach().cpu().numpy()
+            
+        #     elements = np.empty(static_xyz.shape[0], dtype=dtype_full)
+        #     attributes = np.concatenate((static_xyz, normals, static_features_dc, static_features_rest, static_opacity, static_scaling, static_rotation), axis=1)
+        #     elements[:] = list(map(tuple, attributes))
+        #     el = PlyElement.describe(elements, 'vertex')
+        #     PlyData([el]).write(static_path)
+
+        # # dynamic
+        # mkdir_p(os.path.dirname(path) + "_dynamic")
+        # dynamic_path = os.path.dirname(path) + "_dynamic/" + os.path.basename(path)
+
+        # dynamic_xyz = self._xyz.detach().cpu().numpy()
+        # normals = np.zeros_like(dynamic_xyz)
+        # dynamic_features_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        # dynamic_features_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        # dynamic_opacity = self._opacity.detach().cpu().numpy()
+        # dynamic_scaling = self._scaling.detach().cpu().numpy()
+        # dynamic_rotation = self._rotation.detach().cpu().numpy()
+
+        # elements = np.empty(dynamic_xyz.shape[0], dtype=dtype_full)
+        # attributes = np.concatenate((dynamic_xyz, normals, dynamic_features_dc, dynamic_features_rest, dynamic_opacity, dynamic_scaling, dynamic_rotation), axis=1)
+        # elements[:] = list(map(tuple, attributes))
+        # el = PlyElement.describe(elements, 'vertex')
+        # PlyData([el]).write(dynamic_path)
+    
+    def add_densification_stats(self, viewspace_point_tensor_grad, update_filter):
+        self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor_grad[update_filter,:2], dim=-1, keepdim=True)
+        self.denom[update_filter] += 1
+    
+    def training_setup(self, training_args, static_args):
+        self.percent_dense = training_args.percent_dense
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+
+        l = [
+            {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
+            {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
+            {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
+            {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
+            {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
+            {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
+            {'params': [self._xyz_freeze], 'lr': static_args.position_lr * self.spatial_lr_scale, "name": "xyz_freeze"},
+            {'params': [self._features_dc_freeze], 'lr': static_args.feature_lr, "name": "f_dc_freeze"},
+            {'params': [self._features_rest_freeze], 'lr': static_args.feature_lr / 20.0, "name": "f_rest_freeze"},
+            {'params': [self._opacity_freeze], 'lr': static_args.opacity_lr, "name": "opacity_freeze"},
+            {'params': [self._scaling_freeze], 'lr': static_args.scaling_lr, "name": "scaling_freeze"},
+            {'params': [self._rotation_freeze], 'lr': static_args.rotation_lr, "name": "rotation_freeze"}
+        ]
+
+        if self.optimizer_type == "default":
+            self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        elif self.optimizer_type == "sparse_adam":
+            try:
+                self.optimizer = SparseGaussianAdam(l, lr=0.0, eps=1e-15)
+            except:
+                # A special version of the rasterizer is required to enable sparse adam
+                self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+
+        self.exposure_optimizer = torch.optim.Adam([self._exposure])
+
+        self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
+                                                    lr_final=training_args.position_lr_final*self.spatial_lr_scale,
+                                                    lr_delay_mult=training_args.position_lr_delay_mult,
+                                                    max_steps=training_args.position_lr_max_steps)
+        
+        self.exposure_scheduler_args = get_expon_lr_func(training_args.exposure_lr_init, training_args.exposure_lr_final,
+                                                        lr_delay_steps=training_args.exposure_lr_delay_steps,
+                                                        lr_delay_mult=training_args.exposure_lr_delay_mult,
+                                                        max_steps=training_args.iterations)
+
+    def cat_tensors_to_optimizer(self, tensors_dict):
+        optimizable_tensors = {}
+        for group in self.optimizer.param_groups:
+            assert len(group["params"]) == 1
+            if group["name"] in self.skip_group:
+                continue
+            extension_tensor = tensors_dict[group["name"]]
+            stored_state = self.optimizer.state.get(group['params'][0], None)
+            if stored_state is not None:
+
+                stored_state["exp_avg"] = torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=0)
+                stored_state["exp_avg_sq"] = torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=0)
+
+                del self.optimizer.state[group['params'][0]]
+                group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))
+                self.optimizer.state[group['params'][0]] = stored_state
+
+                optimizable_tensors[group["name"]] = group["params"][0]
+            else:
+                group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))
+                optimizable_tensors[group["name"]] = group["params"][0]
+
+        return optimizable_tensors
+    
+    def _prune_optimizer(self, mask):
+        optimizable_tensors = {}
+        for group in self.optimizer.param_groups:
+            if group["name"] in self.skip_group:
+                continue
+            stored_state = self.optimizer.state.get(group['params'][0], None)
+            if stored_state is not None:
+                stored_state["exp_avg"] = stored_state["exp_avg"][mask]
+                stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]
+
+                del self.optimizer.state[group['params'][0]]
+                group["params"][0] = nn.Parameter((group["params"][0][mask].requires_grad_(True)))
+                self.optimizer.state[group['params'][0]] = stored_state
+
+                optimizable_tensors[group["name"]] = group["params"][0]
+            else:
+                group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True))
+                optimizable_tensors[group["name"]] = group["params"][0]
+        return optimizable_tensors
