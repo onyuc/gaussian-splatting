@@ -55,6 +55,7 @@ def evaluate(model_paths):
             test_dir = Path(scene_dir) / "test"
 
             for method in os.listdir(test_dir):
+
                 print("Method:", method)
 
                 full_dict[scene_dir][method] = {}
@@ -67,26 +68,43 @@ def evaluate(model_paths):
                 renders_dir = method_dir / "renders"
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
 
-                ssims = []
                 psnrs = []
-                lpipss = []
+                ssims_1 = []
+                ssims_2 = []
+                lpipss_vgg = []
+                lpipss_alex = []
 
                 for idx in tqdm(range(len(renders)), desc="Metric evaluation progress"):
-                    ssims.append(ssim(renders[idx], gts[idx]))
                     psnrs.append(psnr(renders[idx], gts[idx]))
-                    lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))
+                    ssims_1.append(ssim(renders[idx], gts[idx], 1))
+                    ssims_2.append(ssim(renders[idx], gts[idx], 2))
+                    lpipss_vgg.append(lpips(renders[idx], gts[idx], net_type='vgg'))
+                    lpipss_alex.append(lpips(renders[idx], gts[idx], net_type='alex'))
 
-                print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
+                # print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
                 print("  PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))
-                print("  LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
+                print("  DSSIM_1 : {:>12.7f}".format((1.0-torch.tensor(ssims_1).mean())/2.0, ".5"))
+                print("  DSSIM_2 : {:>12.7f}".format((1.0-torch.tensor(ssims_2).mean())/2.0, ".5"))
+                print("  LPIPS_vgg: {:>12.7f}".format(torch.tensor(lpipss_vgg).mean(), ".5"))
+                print("  LPIPS_alex: {:>12.7f}".format(torch.tensor(lpipss_alex).mean(), ".5"))
                 print("")
 
-                full_dict[scene_dir][method].update({"SSIM": torch.tensor(ssims).mean().item(),
-                                                        "PSNR": torch.tensor(psnrs).mean().item(),
-                                                        "LPIPS": torch.tensor(lpipss).mean().item()})
-                per_view_dict[scene_dir][method].update({"SSIM": {name: ssim for ssim, name in zip(torch.tensor(ssims).tolist(), image_names)},
-                                                            "PSNR": {name: psnr for psnr, name in zip(torch.tensor(psnrs).tolist(), image_names)},
-                                                            "LPIPS": {name: lp for lp, name in zip(torch.tensor(lpipss).tolist(), image_names)}})
+                full_dict[scene_dir][method].update({
+                    # "SSIM": torch.tensor(ssims).mean().item(),
+                    "PSNR": torch.tensor(psnrs).mean().item(),
+                    "DSSIM_1": (1.0 - torch.tensor(ssims_1).mean().item()) / 2.0,
+                    "DSSIM_2": (1.0 - torch.tensor(ssims_2).mean().item()) / 2.0,
+                    "LPIPS_vgg": torch.tensor(lpipss_vgg).mean().item(),
+                    "LPIPS_alex": torch.tensor(lpipss_alex).mean().item(),
+                })
+                per_view_dict[scene_dir][method].update({
+                    # "SSIM": {name: ssim for ssim, name in zip(torch.tensor(ssims).tolist(), image_names)},
+                    "PSNR": {name: psnr for psnr, name in zip(torch.tensor(psnrs).tolist(), image_names)},
+                    "DSSIM_1": {name: (1.0-ssim)/2.0 for ssim, name in zip(torch.tensor(ssims_1).tolist(), image_names)},
+                    "DSSIM_2": {name: (1.0-ssim)/2.0 for ssim, name in zip(torch.tensor(ssims_2).tolist(), image_names)},
+                    "LPIPS_vgg": {name: lp for lp, name in zip(torch.tensor(lpipss_vgg).tolist(), image_names)},
+                    "LPIPS_alex": {name: lp for lp, name in zip(torch.tensor(lpipss_alex).tolist(), image_names)},
+                })
 
             with open(scene_dir + "/results.json", 'w') as fp:
                 json.dump(full_dict[scene_dir], fp, indent=True)
@@ -101,6 +119,6 @@ if __name__ == "__main__":
 
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
-    parser.add_argument('--model_paths', '-m', required=True, nargs="+", type=str, default='[]')
+    parser.add_argument('--model_paths', '-m', required=True, nargs="+", type=str, default=[])
     args = parser.parse_args()
     evaluate(args.model_paths)
