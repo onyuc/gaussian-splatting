@@ -59,7 +59,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     t = frame_num / fps
     
     valid_bool = freetimegs.temporal_opacity(t).squeeze(-1) > 0.005
-    static_bool = static_bool_original & valid_bool
+    static_bool = static_bool_original
     dynamic_bool = ~static_bool_original & valid_bool       
 
     static_means = freetimegs.temporal_means(t)[static_bool]
@@ -90,17 +90,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians.load_freeze_gs(static_means, static_sh_0, static_sh_n, static_opacities, static_scales, static_quats)
 
     static_args = Namespace()
-    # static_args.position_lr = 0.0
-    # static_args.feature_lr = 0.0
-    # static_args.opacity_lr = 0.0
-    # static_args.scaling_lr = 0.0
-    # static_args.rotation_lr = 0.0
+    static_args.position_lr = 0.0
+    static_args.feature_lr = 0.0
+    static_args.opacity_lr = 0.0
+    static_args.scaling_lr = 0.0
+    static_args.rotation_lr = 0.0
+
     # 1/5
-    static_args.position_lr = 0.000001
-    static_args.feature_lr = 0.0005
-    static_args.opacity_lr = 0.0005
-    static_args.scaling_lr = 0.001
-    static_args.rotation_lr = 0.0002
+    # static_args.position_lr = 0.000001
+    # static_args.feature_lr = 0.0005
+    # static_args.opacity_lr = 0.0005
+    # static_args.scaling_lr = 0.001
+    # static_args.rotation_lr = 0.0002
     
     # static_args.position_lr = 0.0000016
     # static_args.feature_lr = 0.0025
@@ -181,9 +182,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         if FUSED_SSIM_AVAILABLE:
-            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0), 1)
         else:
-            ssim_value = ssim(image, gt_image)
+            ssim_value = ssim(image, gt_image, 1)
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 

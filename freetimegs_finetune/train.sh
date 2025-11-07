@@ -2,22 +2,23 @@
 set -u  # 미정의 변수 사용 방지
 
 #IGS/RaDe 이동
-gs_path="/scratch/rchkl2380/Workspace/4D_SOTA/scripts/freetime_finetune"
+gs_path="/scratch/rchkl2380/Workspace/gaussian-splatting/freetimegs_finetune"
 current_path=$(pwd)
 
 cd $gs_path
 
-base_path="/scratch/rchkl2380/Dataset/N3DV"
+base_path="/scratch2/y5ryan/Common/4D_SOTA/dataset/N3DV"
 dataset_name="cook_spinach"
-colmap_ver="colmaps"
-freetimegs_path="/scratch/rchkl2380/Workspace/4D_SOTA/scripts/freetime_finetune/freetimegs_weights/gaussians_dict_col.pt"
-output_path="/scratch/rchkl2380/Workspace/4D_SOTA/train_outputs/3dgs_output/freetime_finetune_col"
+freetimegs_path="/scratch2/y5ryan/Common/4D_SOTA/pretrained/FTGS/${dataset_name}/gaussian_dict_${dataset_name}.pt"
+output_path="/scratch2/y5ryan/Common/4D_SOTA/output/N3DV"
 extra_name=""
 
-gpu_ea=7          # 사용할 GPU 개수 (GPU ID가 0..gpu_ea-1이라고 가정)
+# tmux 활성화후 srun으로 gpu 배정받고 실행
+# srun --gres=gpu:8 --time=12:00:00 --pty bash -i
+gpu_ea=8          # 사용할 GPU 개수 (GPU ID가 0..gpu_ea-1이라고 가정)
 start_num=0
 end_num=299
-ITERS=(1 50 100 500 1000 1500 2000 3000 4000 5000 6000)
+ITERS=(1 6000)
 # ITERS=(1 10 50 100 200 300 400 500 600 700 800 900 1000 1500)
 
 
@@ -25,7 +26,7 @@ run_one() {
   local frame_num="$1"
   local gpu_id="$2"
 
-  local source_path="${base_path}/${dataset_name}/${colmap_ver}/colmap_${frame_num}"
+  local source_path="${base_path}/${dataset_name}/colmap_${frame_num}"
   local model_path="${output_path}/${dataset_name}/frame_${frame_num}${extra_name}"
 
   # 이 프로세스는 지정한 GPU만 보이도록
@@ -40,6 +41,7 @@ run_one() {
     --save_iterations ${ITERS[@]} \
     --freetimegs_path ${freetimegs_path} \
     --frame_num "${frame_num}" \
+    --densification_interval 2000 \
     # --position_lr_init 0.0000016 \
     # --position_lr_init 0.00008 \
     # --feature_lr 0.00125 \

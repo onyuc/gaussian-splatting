@@ -21,6 +21,7 @@ from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
+import warnings
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -603,12 +604,14 @@ class GaussianModel_Custom(GaussianModel):
 
     def load_gs(self, xyz, features_dc, features_extra, opacity, scaling, rotation):
         # Convert new data to tensors
-        new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
-        new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda")
-        new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda")
-        new_opacity = torch.tensor(opacity, dtype=torch.float, device="cuda")
-        new_scaling = torch.tensor(scaling, dtype=torch.float, device="cuda")
-        new_rotation = torch.tensor(rotation, dtype=torch.float, device="cuda")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+            new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda")
+            new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda")
+            new_opacity = torch.tensor(opacity, dtype=torch.float, device="cuda")
+            new_scaling = torch.tensor(scaling, dtype=torch.float, device="cuda")
+            new_rotation = torch.tensor(rotation, dtype=torch.float, device="cuda")
         
         # Concatenate with existing parameters
         # For xyz
@@ -639,12 +642,14 @@ class GaussianModel_Custom(GaussianModel):
         self.max_radii2D = torch.cat([self.max_radii2D, torch.zeros((new_xyz.shape[0]), device="cuda")], dim=0)
 
     def load_freeze_gs(self, xyz, features_dc, features_extra, opacity, scaling, rotation):
-        new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
-        new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda")
-        new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda")
-        new_opacity = torch.tensor(opacity, dtype=torch.float, device="cuda")
-        new_scaling = torch.tensor(scaling, dtype=torch.float, device="cuda")
-        new_rotation = torch.tensor(rotation, dtype=torch.float, device="cuda")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            new_xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+            new_features_dc = torch.tensor(features_dc, dtype=torch.float, device="cuda")
+            new_features_rest = torch.tensor(features_extra, dtype=torch.float, device="cuda")
+            new_opacity = torch.tensor(opacity, dtype=torch.float, device="cuda")
+            new_scaling = torch.tensor(scaling, dtype=torch.float, device="cuda")
+            new_rotation = torch.tensor(rotation, dtype=torch.float, device="cuda")
 
         self._xyz_freeze = nn.Parameter(new_xyz.requires_grad_(True))
         self._features_dc_freeze = nn.Parameter(new_features_dc.requires_grad_(True))
@@ -708,7 +713,6 @@ class GaussianModel_Custom(GaussianModel):
         PlyData([el]).write(path)
 
         # static
-
         # if self._xyz_freeze is not None:
         #     mkdir_p(os.path.dirname(path) + "_static")
         #     static_path = os.path.dirname(path) + "_static/" + os.path.basename(path)
@@ -727,23 +731,23 @@ class GaussianModel_Custom(GaussianModel):
         #     el = PlyElement.describe(elements, 'vertex')
         #     PlyData([el]).write(static_path)
 
-        # # dynamic
-        # mkdir_p(os.path.dirname(path) + "_dynamic")
-        # dynamic_path = os.path.dirname(path) + "_dynamic/" + os.path.basename(path)
+        # dynamic
+        mkdir_p(os.path.dirname(path) + "_dynamic")
+        dynamic_path = os.path.dirname(path) + "_dynamic/" + os.path.basename(path)
 
-        # dynamic_xyz = self._xyz.detach().cpu().numpy()
-        # normals = np.zeros_like(dynamic_xyz)
-        # dynamic_features_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        # dynamic_features_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        # dynamic_opacity = self._opacity.detach().cpu().numpy()
-        # dynamic_scaling = self._scaling.detach().cpu().numpy()
-        # dynamic_rotation = self._rotation.detach().cpu().numpy()
+        dynamic_xyz = self._xyz.detach().cpu().numpy()
+        normals = np.zeros_like(dynamic_xyz)
+        dynamic_features_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        dynamic_features_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        dynamic_opacity = self._opacity.detach().cpu().numpy()
+        dynamic_scaling = self._scaling.detach().cpu().numpy()
+        dynamic_rotation = self._rotation.detach().cpu().numpy()
 
-        # elements = np.empty(dynamic_xyz.shape[0], dtype=dtype_full)
-        # attributes = np.concatenate((dynamic_xyz, normals, dynamic_features_dc, dynamic_features_rest, dynamic_opacity, dynamic_scaling, dynamic_rotation), axis=1)
-        # elements[:] = list(map(tuple, attributes))
-        # el = PlyElement.describe(elements, 'vertex')
-        # PlyData([el]).write(dynamic_path)
+        elements = np.empty(dynamic_xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((dynamic_xyz, normals, dynamic_features_dc, dynamic_features_rest, dynamic_opacity, dynamic_scaling, dynamic_rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(dynamic_path)
     
     def add_densification_stats(self, viewspace_point_tensor_grad, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor_grad[update_filter,:2], dim=-1, keepdim=True)
@@ -761,12 +765,12 @@ class GaussianModel_Custom(GaussianModel):
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
-            {'params': [self._xyz_freeze], 'lr': static_args.position_lr * self.spatial_lr_scale, "name": "xyz_freeze"},
-            {'params': [self._features_dc_freeze], 'lr': static_args.feature_lr, "name": "f_dc_freeze"},
-            {'params': [self._features_rest_freeze], 'lr': static_args.feature_lr / 20.0, "name": "f_rest_freeze"},
-            {'params': [self._opacity_freeze], 'lr': static_args.opacity_lr, "name": "opacity_freeze"},
-            {'params': [self._scaling_freeze], 'lr': static_args.scaling_lr, "name": "scaling_freeze"},
-            {'params': [self._rotation_freeze], 'lr': static_args.rotation_lr, "name": "rotation_freeze"}
+            # {'params': [self._xyz_freeze], 'lr': static_args.position_lr * self.spatial_lr_scale, "name": "xyz_freeze"},
+            # {'params': [self._features_dc_freeze], 'lr': static_args.feature_lr, "name": "f_dc_freeze"},
+            # {'params': [self._features_rest_freeze], 'lr': static_args.feature_lr / 20.0, "name": "f_rest_freeze"},
+            # {'params': [self._opacity_freeze], 'lr': static_args.opacity_lr, "name": "opacity_freeze"},
+            # {'params': [self._scaling_freeze], 'lr': static_args.scaling_lr, "name": "scaling_freeze"},
+            # {'params': [self._rotation_freeze], 'lr': static_args.rotation_lr, "name": "rotation_freeze"}
         ]
 
         if self.optimizer_type == "default":
