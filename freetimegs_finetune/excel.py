@@ -121,7 +121,7 @@ def main():
                 'PSNR_mean': iter_df['PSNR'].mean(),
                 'PSNR_std': iter_df['PSNR'].std(),
                 'DSSIM_1_mean': iter_df['DSSIM_1'].mean(),
-                'DSSIM_1': iter_df['DSSIM_1'].std(),
+                'DSSIM_1_std': iter_df['DSSIM_1'].std(),
                 'DSSIM_2_mean': iter_df['DSSIM_2'].mean(),
                 'DSSIM_2_std': iter_df['DSSIM_2'].std(),
                 'LPIPS_alex_mean': iter_df['LPIPS_alex'].mean(),
